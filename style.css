@@ -144,3 +144,24 @@ tr.withdraw td.txt { color: var(--accent); }
 .notes summary { cursor: pointer; font-weight: 600; }
 .notes li { margin: 6px 0; }
 code { background: var(--bg); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+
+/* ---------- Stage 2: simulation status and charts ---------- */
+.sim-status {
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 10px; font-size: 13px; color: var(--muted);
+}
+.sim-status progress { flex: 0 0 160px; height: 8px; accent-color: var(--accent); }
+.sim-status.error-text { color: var(--error-text); }
+
+.charts { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); transition: opacity .15s; }
+.charts.stale { opacity: .4; }
+.chart {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  min-height: 380px;
+  padding: 4px;
+  overflow: hidden;
+}
+/* An empty chart box must keep its width (not display:none), or Plotly measures it as 0 wide. */
+.chart:empty { min-height: 0; border: 0; padding: 0; }

@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Investment-Linked Policy Simulator</title>
   <link rel="stylesheet" href="style.css">
+  <!-- Plotly draws the charts. Pinned to an exact version. -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.35.2/plotly.min.js"></script>
 </head>
 <body>
   <header class="top">
@@ -37,8 +39,8 @@
         <label>Premium payment years <output id="premiumYears-out"></output>
           <input id="premiumYears" type="range" min="1" max="8" step="1">
         </label>
-        <label>Projection years <output id="projectionYears-out"></output>
-          <input id="projectionYears" type="range" min="1" max="60" step="1">
+        <label>Calculate until age <output id="endAge-out"></output>
+          <input id="endAge" type="range" min="57" max="100" step="1">
         </label>
         <label>Reinvest dividends through year <output id="reinvestYears-out"></output>
           <input id="reinvestYears" type="range" min="0" max="60" step="1">
@@ -82,20 +84,29 @@
       </section>
 
       <section>
-        <h2>Random path</h2>
+        <h2>Simulation</h2>
         <label>Return distribution
           <select id="distribution">
             <option value="normal">Normal</option>
             <option value="t">Student-t (fat tails)</option>
           </select>
         </label>
+        <label>Number of trials
+          <select id="trials">
+            <option value="1000">1,000</option>
+            <option value="5000">5,000</option>
+            <option value="10000">10,000</option>
+            <option value="25000">25,000</option>
+            <option value="50000">50,000</option>
+            <option value="100000">100,000 (slow, about 25 s)</option>
+          </select>
+        </label>
         <div class="row">
           <label class="grow">Seed <input id="seed" type="number" step="1" min="0"></label>
-          <button id="new-path" type="button">New random path</button>
+          <button id="new-path" type="button">New random seed</button>
         </div>
-        <p class="hint">Same seed = same path, so you can change an assumption and see only its effect.</p>
+        <p class="hint">Same seed = same random draws, so changing one assumption shows only its effect. The table at the bottom is trial 1 of the simulation.</p>
       </section>
-
     </aside>
 
     <!-- ============ RESULTS ============ -->
@@ -104,7 +115,20 @@
 
       <div id="cards" class="cards"></div>
 
-      <h2>Year-by-year forecast</h2>
+      <div id="sim-status" class="sim-status" hidden>
+        <progress id="sim-progress" max="1" value="0"></progress>
+        <span id="sim-text"></span>
+      </div>
+
+      <h2>Simulation results</h2>
+      <div id="charts" class="charts">
+        <div class="chart" id="chart-hist"></div>
+        <div class="chart" id="chart-tav"></div>
+        <div class="chart" id="chart-fees"></div>
+        <div class="chart" id="chart-breakdown"></div>
+      </div>
+
+      <h2>Sample path: trial 1 of the simulation</h2>
       <div class="table-wrap">
         <table id="forecast"></table>
       </div>
@@ -112,12 +136,14 @@
       <details class="notes">
         <summary>Model notes</summary>
         <ul>
-          <li><strong>Premium payment years.</strong> The notebook's <code>investment</code> sets 3 years, but the forecast function ignores it and hard-codes the plan's 8-year term. This page defaults to 8 so it matches the notebook, and lets you change it.</li>
-          <li><strong>Welcome bonus</strong> = tier rate × annual premium (e.g. 3% × $10,000 = $300 in year 1). The original notebook added the bare rate (0.03) as dollars; this page corrects that, so its numbers differ slightly from the notebook.</li>
-          <li><strong>Welcome bonus tiers</strong> use the policy year as the "premium number", which is only right for annual payments.</li>
-          <li><strong>Not modelled:</strong> premium holiday, top-up premiums by choice, surrender, and switching funds.</li>
+          <li><strong>Premium payment years.</strong> The notebook's <code>investment</code> sets 3 years, but its forecast function ignores that and hard-codes the plan's 8-year term. This page defaults to 8 to match the notebook, and lets you change it.</li>
+          <li><strong>Welcome bonus</strong> = tier rate × annual premium (e.g. 3% × $10,000 = $300 in year 1), paid only in years a premium is received, and tiers count payments (so monthly year 2 is tier 2). The original notebook added the bare rate as dollars, paid it after premiums stopped, and used the policy year as the payment number, so its totals differ slightly.</li>
+          <li><strong>Monte Carlo.</strong> Each trial draws one random return per fund per year (normal, or Student-t with 3 degrees of freedom), then runs the full forecast. Charts show percentiles across trials. The 5th–95th band covers 90% of outcomes. Note that median and percentile lines are taken year by year, so they don't trace any one trial.</li>
+          <li><strong>Top-ups.</strong> If a year's charges exceed the account value, the model adds a top-up to cover them. "Trials needing top-ups" counts trials where that happens at least once.</li>
+          <li><strong>Calculation end age.</strong> The forecast runs from the entry age to the age you choose (maximum 100), counting the end age as the last policy year. The benefit-charge table stops at age 99, so age 100 uses the age-99 rate.</li>
+          <li><strong>Not modelled:</strong> premium holiday, voluntary top-ups, surrender, and switching funds.</li>
           <li><strong>Fund data</strong> is a snapshot (see <code>data/funds.json</code>). Dividends are a fixed amount per unit per year.</li>
-          <li><strong>Random numbers</strong> come from a seeded JavaScript generator, so the same seed gives a different path than numpy would.</li>
+          <li><strong>Random numbers</strong> come from a seeded JavaScript generator, so the same seed gives different paths than numpy would.</li>
         </ul>
       </details>
     </section>
