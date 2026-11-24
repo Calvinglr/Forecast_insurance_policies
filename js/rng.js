@@ -51,16 +51,22 @@ export function makeStudentT(seed, df = 3) {
   };
 }
 
-// Build the list of "standard shocks" (one per policy year) for each fund.
-// Each fund gets its own stream (seed, seed+1, ...) so a fund's path does not
-// change when you change the OTHER fund's weight.
+// One seeded stream that hands out the random "shocks" for trial after trial.
+//
+//   const next = makeTrialShocks(['AGAIF', 'AGDIF'], 43, 42, 'normal');
+//   next()  // trial 1: { AGAIF: [43 numbers], AGDIF: [43 numbers] }
+//   next()  // trial 2: ...
+//
+// Shocks are always drawn for EVERY fund, in the same order, even if a fund has a 0%
+// weight. That way a fund's path does not change when you move the weight slider.
 // The engine turns a shock into a return:  return = mean + volatility * shock.
-export function makeShocks(fundCodes, years, seed, distribution) {
-  const out = {};
-  fundCodes.forEach((code, i) => {
-    const draw =
-      distribution === 't' ? makeStudentT(seed + i * 1000, 3) : makeNormal(seed + i * 1000);
-    out[code] = Array.from({ length: years }, () => draw());
-  });
-  return out;
+export function makeTrialShocks(fundCodes, years, seed, distribution) {
+  const draw = distribution === 't' ? makeStudentT(seed, 3) : makeNormal(seed);
+  return function nextTrial() {
+    const out = {};
+    for (const code of fundCodes) {
+      out[code] = Array.from({ length: years }, () => draw());
+    }
+    return out;
+  };
 }

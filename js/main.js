@@ -1,8 +1,11 @@
 // main.js — connects the input panel to the AWV engine and draws the results.
-// Flow:  form inputs  ->  readForm()  ->  runForecast()  ->  render cards + table.
+//
+//   form inputs -> readForm() -> runForecast()   -> sample-path table   (instant)
+//                            \-> Web Worker      -> Monte Carlo charts  (after a short pause)
 
 import { FREQUENCIES, runForecast, summarise, validateInvestment } from './awv.js';
-import { makeShocks } from './rng.js';
+import { makeTrialShocks } from './rng.js';
+import { drawAll, clearAll } from './charts.js';
 
 const FUND_CODES = ['AGAIF', 'AGDIF'];
 const $ = (id) => document.getElementById(id);
@@ -13,9 +16,9 @@ let plan, fundData; // loaded from data/*.json
 const DEFAULTS = {
   age: 57, gender: 'Male',
   premium: 10000, frequency: 'Annual',
-  premiumYears: 8, projectionYears: 43, reinvestYears: 10,
+  premiumYears: 8, endAge: 100, reinvestYears: 10,
   weight: 100, horizon: '1y',
-  distribution: 'normal', seed: 42,
+  distribution: 'normal', trials: 10000, seed: 42,
 };
 
 // ---------------------------------------------------------------------------
@@ -29,16 +32,16 @@ const num = (el, fallback) => {
 };
 const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
 
-// Pairs of [form field id, URL key] used to save/restore a scenario in the page address.
+// Form field id -> short key used to save/restore a scenario in the page address.
 const URL_KEYS = {
   age: 'age', gender: 'sex', premium: 'prem', frequency: 'freq', premiumYears: 'py',
-  projectionYears: 'yrs', reinvestYears: 'ry', weight: 'w', horizon: 'h',
-  distribution: 'dist', seed: 'seed',
+  endAge: 'end', reinvestYears: 'ry', weight: 'w', horizon: 'h',
+  distribution: 'dist', trials: 'n', seed: 'seed',
 };
 const ASSUMPTION_KEYS = FUND_CODES.flatMap((c) => ['mu', 'sigma', 'div'].map((k) => `${c}-${k}`));
 
 // ---------------------------------------------------------------------------
-// Form <-> defaults
+// Form <-> defaults <-> URL
 // ---------------------------------------------------------------------------
 function setField(id, value) {
   const el = $(id);
@@ -62,25 +65,16 @@ function applyHistoricalAssumptions() {
 function loadFromUrl() {
   const q = new URLSearchParams(location.search);
   for (const [id, key] of Object.entries(URL_KEYS)) {
-    if (!q.has(key)) continue;
-    const raw = q.get(key);
-    const el = $(id);
-    if (el.type === 'checkbox') el.checked = raw === '1';
-    else el.value = raw;
+    if (q.has(key)) $(id).value = q.get(key);
   }
 }
-
 function loadAssumptionsFromUrl() {
   const q = new URLSearchParams(location.search);
   for (const id of ASSUMPTION_KEYS) if (q.has(id)) $(id).value = q.get(id);
 }
-
 function saveToUrl() {
   const q = new URLSearchParams();
-  for (const [id, key] of Object.entries(URL_KEYS)) {
-    const el = $(id);
-    q.set(key, el.type === 'checkbox' ? (el.checked ? '1' : '0') : el.value);
-  }
+  for (const [id, key] of Object.entries(URL_KEYS)) q.set(key, $(id).value);
   for (const id of ASSUMPTION_KEYS) q.set(id, $(id).value);
   try { history.replaceState(null, '', '?' + q.toString()); } catch { /* ignore (e.g. file://) */ }
 }
@@ -89,25 +83,27 @@ function saveToUrl() {
 // Read the form into a plain object
 // ---------------------------------------------------------------------------
 function readForm() {
-  const projectionYears = clamp(Math.round(num($('projectionYears'), DEFAULTS.projectionYears)), 1, 60);
+  // The user picks the age to calculate until; the number of policy years follows from it.
+  const entryAge = clamp(Math.round(num($('age'), DEFAULTS.age)), 0, 99);
+  const endAge = clamp(Math.round(num($('endAge'), DEFAULTS.endAge)), entryAge, 100);
+  const projectionYears = endAge - entryAge + 1;
   const weightAGAIF = clamp(num($('weight'), DEFAULTS.weight), 0, 100) / 100;
   const weights = { AGAIF: weightAGAIF, AGDIF: 1 - weightAGAIF };
 
   const funds = {};
   for (const code of FUND_CODES) {
-    const f = fundData.funds[code];
     funds[code] = {
       weight: weights[code],
       mu: num($(`${code}-mu`), 0) / 100,
       sigma: Math.max(num($(`${code}-sigma`), 0), 0) / 100,
       dividend: Math.max(num($(`${code}-div`), 0), 0),
-      price: f.latestPrice,
+      price: fundData.funds[code].latestPrice,
     };
   }
 
   return {
     client: {
-      entryAge: clamp(Math.round(num($('age'), DEFAULTS.age)), 0, 99),
+      entryAge,
       gender: $('gender').value,
     },
     investment: {
@@ -120,23 +116,34 @@ function readForm() {
     funds,
     distribution: $('distribution').value,
     seed: Math.max(Math.round(num($('seed'), DEFAULTS.seed)), 0),
+    nTrials: clamp(Math.round(num($('trials'), DEFAULTS.trials)), 100, 100000),
     horizon: $('horizon').value,
   };
 }
 
 // ---------------------------------------------------------------------------
-// Drawing
+// Summary cards, table, messages
 // ---------------------------------------------------------------------------
-function renderCards(s, inputs) {
+let lastRows = null;  // the sample path
+let lastSim = null;   // the latest finished Monte Carlo (or null while running)
+
+function renderCards() {
+  if (!lastRows) { $('cards').innerHTML = ''; return; }
+  const premiums = summarise(lastRows).premiumsPaid;
+  const age = lastRows[lastRows.length - 1].age;
+  const pending = '…';
+  const sim = lastSim;
   const cards = [
-    { k: `Value at age ${s.finalAge}`, v: money(s.finalTav, 0) },
-    { k: 'Premiums paid', v: money(s.premiumsPaid, 0) },
-    { k: 'Dividends withdrawn', v: money(s.withdrawals, 0) },
-    { k: 'Total fees & charges', v: money(s.fees, 0) },
+    { k: `Median value at age ${age}`, v: sim ? money(sim.tavMed.at(-1), 0) : pending },
+    { k: '5th percentile (bad case)', v: sim ? money(sim.tavP5.at(-1), 0) : pending },
+    { k: '95th percentile (good case)', v: sim ? money(sim.tavP95.at(-1), 0) : pending },
+    { k: 'Premiums paid', v: money(premiums, 0) },
   ];
-  if (s.topups > 0) {
+  if (sim && sim.trialsNeedingTopup > 0) {
+    const pct = (100 * sim.trialsNeedingTopup) / sim.n;
     cards.push({
-      k: `Top-ups needed (from year ${s.firstTopupYear})`, v: money(s.topups, 0), warn: true,
+      k: 'Trials where fees outrun the account (top-up needed)',
+      v: `${pct < 1 ? pct.toFixed(2) : pct.toFixed(1)}%`, warn: true,
     });
   }
   $('cards').innerHTML = cards
@@ -189,6 +196,70 @@ function setMsg(id, text, kind) {
 }
 
 // ---------------------------------------------------------------------------
+// Monte Carlo: runs in a Web Worker so the page never freezes
+// ---------------------------------------------------------------------------
+const chartEls = {
+  hist: $('chart-hist'), tav: $('chart-tav'), fees: $('chart-fees'), breakdown: $('chart-breakdown'),
+};
+let worker = null;
+let simTimer = null;
+
+function stopWorker() {
+  clearTimeout(simTimer);
+  if (worker) { worker.terminate(); worker = null; }
+}
+
+function setStatus(text, { progress = null, isError = false } = {}) {
+  const box = $('sim-status');
+  box.hidden = !text;
+  box.classList.toggle('error-text', isError);
+  $('sim-text').textContent = text || '';
+  $('sim-progress').hidden = progress === null;
+  if (progress !== null) $('sim-progress').value = progress;
+}
+
+function startSimulation(inputs) {
+  stopWorker();
+  const t0 = performance.now();
+  setStatus(`Running ${inputs.nTrials.toLocaleString()} trials…`, { progress: 0 });
+
+  try {
+    worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+  } catch (e) {
+    setStatus('This browser could not start the background simulation.', { isError: true });
+    return;
+  }
+  const mine = worker; // ignore messages from a worker we have since replaced
+  worker.onmessage = (event) => {
+    if (worker !== mine) return;
+    const msg = event.data;
+    if (msg.type === 'progress') {
+      setStatus(`Running ${inputs.nTrials.toLocaleString()} trials… ${Math.round(msg.fraction * 100)}%`, { progress: msg.fraction });
+    } else if (msg.type === 'done') {
+      lastSim = msg.result;
+      $('charts').classList.remove('stale');
+      if (typeof Plotly !== 'undefined') drawAll(chartEls, lastSim);
+      renderCards();
+      const secs = ((performance.now() - t0) / 1000).toFixed(1);
+      setStatus(`${lastSim.n.toLocaleString()} trials in ${secs} s`);
+      mine.terminate();
+      worker = null;
+    } else if (msg.type === 'error') {
+      setStatus('Simulation failed: ' + msg.message, { isError: true });
+    }
+  };
+  worker.onerror = (e) => {
+    if (worker !== mine) return;
+    setStatus('Simulation failed to start. If you opened the page from your computer, use the GitHub Pages address instead.', { isError: true });
+  };
+
+  const { seed, nTrials, ...forecastInputs } = inputs;
+  worker.postMessage({
+    plan, inputs: forecastInputs, nTrials, seed, fundCodes: FUND_CODES,
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Main update: runs on every input change
 // ---------------------------------------------------------------------------
 function update() {
@@ -198,7 +269,8 @@ function update() {
   // Slider labels and limits
   $('reinvestYears').max = investment.projectionYears;
   $('premiumYears-out').textContent = investment.premiumPaymentYears;
-  $('projectionYears-out').textContent = `${investment.projectionYears} (to age ${inputs.client.entryAge + investment.projectionYears - 1})`;
+  $('endAge').min = inputs.client.entryAge;
+  $('endAge-out').textContent = `${inputs.client.entryAge + investment.projectionYears - 1} (${investment.projectionYears} year${investment.projectionYears === 1 ? '' : 's'})`;
   $('reinvestYears-out').textContent = investment.yearsToReinvest;
   $('weight-out').textContent = `${Math.round(inputs.funds.AGAIF.weight * 100)}% / AGDIF ${Math.round(inputs.funds.AGDIF.weight * 100)}%`;
   $('fund-AGAIF').style.opacity = inputs.funds.AGAIF.weight > 0 ? 1 : 0.5;
@@ -222,22 +294,33 @@ function update() {
   setMsg('premium-msg', check.message, check.ok ? 'good' : 'bad');
   const err = $('error');
   if (!check.ok) {
+    stopWorker();
     err.textContent = check.message + ' Increase the premium or choose a more frequent plan.';
     err.hidden = false;
+    lastRows = null; lastSim = null;
     $('cards').innerHTML = '';
     $('forecast').innerHTML = '';
+    clearAll(chartEls);
+    setStatus('');
     saveToUrl();
     return;
   }
   err.hidden = true;
 
-  // Run the forecast
-  const shocks = makeShocks(FUND_CODES, investment.projectionYears, inputs.seed, inputs.distribution);
-  const rows = runForecast(plan, { ...inputs, shocks });
-
-  renderCards(summarise(rows), inputs);
-  renderTable(rows, inputs);
+  // Sample path = trial 1 of the simulation (first draw from the seeded stream). Instant.
+  const shocks = makeTrialShocks(FUND_CODES, investment.projectionYears, inputs.seed, inputs.distribution)();
+  lastRows = runForecast(plan, { ...inputs, shocks });
+  lastSim = null; // old simulation no longer matches these inputs
+  renderCards();
+  renderTable(lastRows, inputs);
   saveToUrl();
+
+  // Charts: grey out the old ones and restart the simulation after a short pause,
+  // so dragging a slider doesn't launch a run for every tick.
+  $('charts').classList.add('stale');
+  stopWorker();
+  setStatus('Updating simulation…');
+  simTimer = setTimeout(() => startSimulation(inputs), 350);
 }
 
 // Run at most once per animation frame so dragging a slider stays smooth.
@@ -267,6 +350,11 @@ async function init() {
       'browsers block that. Use the GitHub Pages address or a local web server instead.';
     return;
   }
+  if (typeof Plotly === 'undefined') {
+    const err = $('error');
+    err.hidden = false;
+    err.textContent = 'The chart library (Plotly) did not load, so charts will be missing. Check your internet connection.';
+  }
 
   $('frequency').innerHTML = FREQUENCIES.map((f) => `<option>${f}</option>`).join('');
   for (const [id, v] of Object.entries(DEFAULTS)) setField(id, v);
@@ -284,6 +372,11 @@ async function init() {
   $('new-path').addEventListener('click', () => {
     $('seed').value = Math.floor(Math.random() * 1_000_000);
     scheduleUpdate();
+  });
+
+  // Redraw charts when the device switches between light and dark mode.
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    if (lastSim && typeof Plotly !== 'undefined') drawAll(chartEls, lastSim);
   });
 
   update();

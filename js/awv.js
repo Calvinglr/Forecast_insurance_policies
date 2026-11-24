@@ -158,10 +158,15 @@ export function runForecast(plan, inputs) {
     // --- contributions and bonuses ---
     const annualContribution = policyYear <= premiumPaymentYears ? annualisedPremium : 0;
 
-    // Welcome bonus = tier rate x annual premium.
-    // (The original notebook added the bare rate, e.g. 0.03, as if it were dollars.)
-    const welcomeBonusAmt =
-      welcomeBonusRate(plan, frequency, policyYear, annualisedPremium) * annualisedPremium;
+    // Welcome bonus = tier rate x annual premium, and only in years a premium is received.
+    // The tiers count PAYMENTS (e.g. monthly tier 1 = payments 1-12), so policy year n starts
+    // at payment number (n-1) x payments-per-year + 1, which falls in tier n for any frequency.
+    // (The original notebook added the bare rate, e.g. 0.03, as if it were dollars, paid it
+    // even after premiums stopped, and used the policy year as the payment number.)
+    const firstPaymentNumber = (policyYear - 1) * PAYMENTS_PER_YEAR[frequency] + 1;
+    const welcomeBonusAmt = annualContribution
+      ? welcomeBonusRate(plan, frequency, firstPaymentNumber, annualisedPremium) * annualisedPremium
+      : 0;
 
     const investmentBonusAmt = investmentBonus(plan, policyYear, onPremiumHoliday, annualisedPremium);
     const performanceBonusAmt = performanceBonus(plan, policyYear, onPremiumHoliday, totalTavBeg);
