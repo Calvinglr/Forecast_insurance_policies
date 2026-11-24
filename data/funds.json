@@ -1,0 +1,54 @@
+{
+ "asOf": "2026-06-01",
+ "source": "Yahoo Finance via yfinance, copied from notebook cell 15 output",
+ "funds": {
+  "AGAIF": {
+   "name": "AGAIF",
+   "ticker": "0P0001RMIN.SI",
+   "latestPrice": 1.1059999465942383,
+   "latestDividend": 0.0181,
+   "horizons": {
+    "1y": {
+     "return": 0.09803687074003342,
+     "vol": 0.07813493766097503
+    },
+    "3y": {
+     "return": 0,
+     "vol": 0
+    },
+    "5y": {
+     "return": 0,
+     "vol": 0
+    },
+    "10y": {
+     "return": 0,
+     "vol": 0
+    }
+   }
+  },
+  "AGDIF": {
+   "name": "AGDIF",
+   "ticker": "0P0001KL95.SI",
+   "latestPrice": 0.9350000023841858,
+   "latestDividend": 0.0113,
+   "horizons": {
+    "1y": {
+     "return": 0.06790832543285297,
+     "vol": 0.0560996328742549
+    },
+    "3y": {
+     "return": 0.03404680444615504,
+     "vol": 0.06658004085794264
+    },
+    "5y": {
+     "return": 0,
+     "vol": 0
+    },
+    "10y": {
+     "return": 0,
+     "vol": 0
+    }
+   }
+  }
+ }
+}
