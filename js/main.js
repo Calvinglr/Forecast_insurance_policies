@@ -15,7 +15,7 @@ const DEFAULTS = {
   premium: 10000, frequency: 'Annual',
   premiumYears: 8, projectionYears: 43, reinvestYears: 10,
   weight: 100, horizon: '1y',
-  distribution: 'normal', seed: 42, welcomeAsAmount: false,
+  distribution: 'normal', seed: 42,
 };
 
 // ---------------------------------------------------------------------------
@@ -33,7 +33,7 @@ const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
 const URL_KEYS = {
   age: 'age', gender: 'sex', premium: 'prem', frequency: 'freq', premiumYears: 'py',
   projectionYears: 'yrs', reinvestYears: 'ry', weight: 'w', horizon: 'h',
-  distribution: 'dist', seed: 'seed', welcomeAsAmount: 'wb',
+  distribution: 'dist', seed: 'seed',
 };
 const ASSUMPTION_KEYS = FUND_CODES.flatMap((c) => ['mu', 'sigma', 'div'].map((k) => `${c}-${k}`));
 
@@ -121,7 +121,6 @@ function readForm() {
     distribution: $('distribution').value,
     seed: Math.max(Math.round(num($('seed'), DEFAULTS.seed)), 0),
     horizon: $('horizon').value,
-    options: { welcomeBonusAsAmount: $('welcomeAsAmount').checked },
   };
 }
 

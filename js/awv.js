@@ -115,14 +115,12 @@ export function validateInvestment(plan, frequency, annualPremium) {
 //     AGAIF: { weight, mu, sigma, dividend, price }, ...   // weight 0..1, mu/sigma annual
 //   },
 //   shocks:       { AGAIF: [z1, z2, ...], ... },            // standard random draws, one per year
-//   distribution: 'normal' | 't',
-//   options:      { welcomeBonusAsAmount }                  // see note below
+//   distribution: 'normal' | 't'
 // }
 //
 // Returns an array with one row per policy year.
 export function runForecast(plan, inputs) {
   const { client, investment, funds: fundInputs, shocks, distribution } = inputs;
-  const options = inputs.options || {};
   const years = investment.projectionYears;
   const frequency = investment.paymentFrequency;
   const annualisedPremium = investment.annualPremium;
@@ -160,10 +158,10 @@ export function runForecast(plan, inputs) {
     // --- contributions and bonuses ---
     const annualContribution = policyYear <= premiumPaymentYears ? annualisedPremium : 0;
 
-    // NOTE: the notebook adds the welcome-bonus *rate* (e.g. 0.03) as if it were dollars.
-    // Tick "welcomeBonusAsAmount" to use rate x annual premium instead.
-    const wbRate = welcomeBonusRate(plan, frequency, policyYear, annualisedPremium);
-    const welcomeBonusAmt = options.welcomeBonusAsAmount ? wbRate * annualisedPremium : wbRate;
+    // Welcome bonus = tier rate x annual premium.
+    // (The original notebook added the bare rate, e.g. 0.03, as if it were dollars.)
+    const welcomeBonusAmt =
+      welcomeBonusRate(plan, frequency, policyYear, annualisedPremium) * annualisedPremium;
 
     const investmentBonusAmt = investmentBonus(plan, policyYear, onPremiumHoliday, annualisedPremium);
     const performanceBonusAmt = performanceBonus(plan, policyYear, onPremiumHoliday, totalTavBeg);
