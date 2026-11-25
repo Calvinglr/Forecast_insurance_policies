@@ -128,6 +128,39 @@
         <div class="chart" id="chart-breakdown"></div>
       </div>
 
+      <h2>Sensitivity analysis: return vs risk</h2>
+      <div class="sens-controls">
+        <label>Show
+          <select id="sens-metric">
+            <option value="tavMed">Median value</option>
+            <option value="tavP5">5th percentile (bad case)</option>
+            <option value="tavP95">95th percentile (good case)</option>
+            <option value="topup">Trials needing a top-up</option>
+          </select>
+        </label>
+        <label>At age <select id="sens-age"></select></label>
+        <label>Trials per cell
+          <select id="sens-trials">
+            <option value="500">500</option>
+            <option value="1000" selected>1,000</option>
+            <option value="2000">2,000</option>
+            <option value="5000">5,000 (slow)</option>
+          </select>
+        </label>
+        <button id="sens-run" type="button" class="primary">Run sensitivity analysis</button>
+      </div>
+      <div id="sens-status" class="sim-status" hidden>
+        <progress id="sens-progress" max="1" value="0"></progress>
+        <span id="sens-text"></span>
+      </div>
+      <p id="sens-stale" class="msg warn" hidden>Your inputs have changed since this table was calculated. Press Run to refresh it.</p>
+      <div id="sens-wrap" class="sens-wrap">
+        <p id="sens-empty" class="hint">Press “Run sensitivity analysis” to see how the result changes across returns from −12% to 24% and volatility from 2% to 20%. It runs 50 simulations in the background.</p>
+        <div id="sens-table" class="sens-scroll"></div>
+        <div id="sens-legend" class="sens-legend" hidden></div>
+        <p id="sens-note" class="hint"></p>
+      </div>
+
       <h2>Sample path: trial 1 of the simulation</h2>
       <div class="table-wrap">
         <table id="forecast"></table>

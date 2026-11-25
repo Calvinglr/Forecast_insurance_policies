@@ -165,3 +165,34 @@ code { background: var(--bg); padding: 1px 5px; border-radius: 4px; font-size: 1
 }
 /* An empty chart box must keep its width (not display:none), or Plotly measures it as 0 wide. */
 .chart:empty { min-height: 0; border: 0; padding: 0; }
+
+/* ---------- Sensitivity table ---------- */
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.sens-controls { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: flex-end; }
+.sens-controls label { margin: 0; flex: 1 1 150px; }
+.sens-controls select { width: 100%; }
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; padding: 8px 14px; }
+button.primary:disabled { opacity: .5; cursor: default; }
+.sens-wrap { margin-top: 12px; transition: opacity .15s; }
+.sens-wrap.stale { opacity: .45; }
+.sens-scroll { overflow-x: auto; }
+table.sens { border-collapse: separate; border-spacing: 3px; width: 100%; min-width: 380px; font-variant-numeric: tabular-nums; }
+table.sens th, table.sens td { position: static; text-align: center; border: 0; background: none; padding: 9px 4px; white-space: nowrap; }
+table.sens thead th { color: var(--muted); font-size: 12px; font-weight: 600; }
+table.sens tbody th { color: var(--text); font-weight: 600; width: 14%; }
+table.sens td { border-radius: 6px; font-weight: 600; font-size: 13px; }
+.sens-legend { margin-top: 12px; max-width: 520px; }
+.sens-legend .bar { display: block; height: 10px; border-radius: 5px; }
+.sens-legend .ends { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--muted); margin-top: 4px; }
+.sens-legend .ends span:nth-child(2) { text-align: center; }
+.sens-legend .ends span:last-child { text-align: right; }
+
+/* Phones: tighter table so all five volatility columns fit without sideways scrolling */
+@media (max-width: 600px) {
+  table.sens { min-width: 0; border-spacing: 2px; }
+  table.sens th, table.sens td { padding: 8px 1px; }
+  table.sens td { font-size: 11.5px; border-radius: 5px; }
+  table.sens thead th { font-size: 11px; }
+  table.sens tbody th { width: 13%; font-size: 12px; }
+  table.sens .corner { font-size: 10px; white-space: normal; }
+}
