@@ -26,7 +26,8 @@ function baseLayout(title, xTitle, yTitle) {
     xaxis: { title: { text: xTitle }, gridcolor: grid, zerolinecolor: grid },
     yaxis: { title: { text: yTitle }, gridcolor: grid, zerolinecolor: grid, tickformat: '$.3~s', hoverformat: '$,.0f' },
     legend: { orientation: 'h', y: -0.22 },
-    hoverlabel: { font: { size: 12 } },
+    // Black text on a white box, so hover details read the same in light and dark mode.
+    hoverlabel: { bgcolor: '#ffffff', bordercolor: '#9aa3af', font: { color: '#000000', size: 12 } },
   };
 }
 

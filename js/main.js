@@ -6,6 +6,7 @@
 import { FREQUENCIES, runForecast, summarise, validateInvestment } from './awv.js';
 import { makeTrialShocks } from './rng.js';
 import { drawAll, clearAll } from './charts.js';
+import { buildCells, renderSensitivity, renderLegend } from './sensitivity.js';
 
 const FUND_CODES = ['AGAIF', 'AGDIF'];
 const $ = (id) => document.getElementById(id);
@@ -265,6 +266,138 @@ function startSimulation(inputs) {
 }
 
 // ---------------------------------------------------------------------------
+// Sensitivity analysis: one simulation for every (return, volatility) pair in the grid
+// ---------------------------------------------------------------------------
+let lastInputs = null;  // the inputs behind lastRows (null when the inputs are invalid)
+let sensGrid = null;    // finished results, or null
+let sensWorkers = [];   // running background workers (empty when idle)
+let sensRunKey = null;  // sensKeyOf() of the inputs the current run was started with
+
+// Everything that changes the grid EXCEPT each fund's return and volatility (the grid replaces those).
+function sensKeyOf(inputs) {
+  const funds = {};
+  for (const [code, f] of Object.entries(inputs.funds)) funds[code] = { weight: f.weight, dividend: f.dividend, price: f.price };
+  return JSON.stringify({
+    client: inputs.client, investment: inputs.investment, funds,
+    distribution: inputs.distribution, seed: inputs.seed,
+  });
+}
+
+function setSensStatus(text, { progress = null, isError = false } = {}) {
+  const box = $('sens-status');
+  box.hidden = !text;
+  box.classList.toggle('error-text', isError);
+  $('sens-text').textContent = text || '';
+  $('sens-progress').hidden = progress === null;
+  if (progress !== null) $('sens-progress').value = progress;
+}
+
+function stopSensitivity() {
+  sensWorkers.forEach((w) => w.terminate());
+  sensWorkers = [];
+  $('sens-run').disabled = !lastInputs;
+}
+
+// Redraw the table from stored results (no re-simulation: changing the metric or age is instant).
+function renderSens() {
+  const has = !!sensGrid;
+  $('sens-empty').hidden = has;
+  $('sens-legend').hidden = !has;
+  $('sens-age').disabled = !has;
+  if (!has) {
+    $('sens-table').innerHTML = '';
+    $('sens-note').textContent = '';
+    $('sens-age').innerHTML = '';
+    $('sens-stale').hidden = true;
+    $('sens-wrap').classList.remove('stale');
+    return;
+  }
+
+  // "At age" choices: every 5th age, plus the final age. Keep the user's choice if still available.
+  const ages = sensGrid.ages;
+  const last = ages[ages.length - 1];
+  const choices = ages.filter((a) => a % 5 === 0 || a === last);
+  const select = $('sens-age');
+  const previous = Number(select.value);
+  select.innerHTML = choices.map((a) => `<option value="${a}">${a}</option>`).join('');
+  select.value = String(choices.includes(previous) ? previous : last);
+
+  const metric = $('sens-metric').value;
+  renderSensitivity($('sens-table'), sensGrid, { metric, yearIndex: ages.indexOf(Number(select.value)) });
+  renderLegend($('sens-legend'), metric);
+  $('sens-note').textContent =
+    `Each cell is ${sensGrid.n.toLocaleString()} trials (seed ${sensGrid.seed}). Return is the annual price return before ` +
+    'dividends, and return and volatility are applied to every fund in your mix. Colours compare the value with the ' +
+    'premiums paid in by that age. Hover or tap a cell for the exact figure.';
+}
+
+// Grey the table out when the inputs no longer match the ones it was calculated with.
+function checkSensStale() {
+  const stale = !!sensGrid && !!lastInputs && sensGrid.key !== sensKeyOf(lastInputs);
+  $('sens-wrap').classList.toggle('stale', stale);
+  $('sens-stale').hidden = !stale;
+}
+
+function startSensitivity() {
+  if (!lastInputs || !lastRows) return;
+  stopSensitivity();
+  const inputs = lastInputs;
+  sensRunKey = sensKeyOf(inputs);
+  const nTrials = Number($('sens-trials').value);
+  const cells = buildCells();
+  const workerCount = Math.max(1, Math.min(4, navigator.hardwareConcurrency || 2, cells.length));
+  const { seed, nTrials: _mainTrials, horizon, ...forecastInputs } = inputs;
+  const results = {};
+  const t0 = performance.now();
+  $('sens-run').disabled = true;
+  setSensStatus(`Running ${cells.length} simulations of ${nTrials.toLocaleString()} trials…`, { progress: 0 });
+
+  const fail = (message) => {
+    stopSensitivity();
+    setSensStatus(message, { isError: true });
+  };
+
+  for (let i = 0; i < workerCount; i++) {
+    let w;
+    try {
+      w = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+    } catch (e) {
+      fail('This browser could not start background workers.');
+      return;
+    }
+    sensWorkers.push(w);
+    w.onmessage = (event) => {
+      if (!sensWorkers.includes(w)) return; // from a run we have since cancelled
+      const msg = event.data;
+      if (msg.type === 'cell') {
+        results[msg.key] = msg.result;
+        const done = Object.keys(results).length;
+        setSensStatus(`Running ${cells.length} simulations of ${nTrials.toLocaleString()} trials… ${done}/${cells.length}`, { progress: done / cells.length });
+        if (done === cells.length) {
+          let paid = 0;
+          sensGrid = {
+            cells: results, n: nTrials, seed, key: sensKeyOf(inputs),
+            ages: lastRows.map((r) => r.age),
+            cumPremiums: lastRows.map((r) => (paid += r.contribution)),
+          };
+          stopSensitivity();
+          setSensStatus(`${cells.length} simulations × ${nTrials.toLocaleString()} trials in ${((performance.now() - t0) / 1000).toFixed(1)} s`);
+          renderSens();
+          checkSensStale();
+        }
+      } else if (msg.type === 'error') {
+        fail('Sensitivity analysis failed: ' + msg.message);
+      }
+    };
+    w.onerror = () => fail('Sensitivity analysis failed to start. If you opened the page from your computer, use the GitHub Pages address instead.');
+    w.postMessage({
+      type: 'cells', plan, inputs: forecastInputs, nTrials, seed, fundCodes: FUND_CODES,
+      cells: cells.filter((_, j) => j % workerCount === i),
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main update: runs on every input change
 // ---------------------------------------------------------------------------
 function update() {
@@ -302,7 +435,11 @@ function update() {
     stopWorker();
     err.textContent = check.message + ' Increase the premium or choose a more frequent plan.';
     err.hidden = false;
-    lastRows = null; lastSim = null;
+    lastRows = null; lastSim = null; lastInputs = null;
+    sensGrid = null;
+    stopSensitivity();
+    setSensStatus('');
+    renderSens();
     $('cards').innerHTML = '';
     $('forecast').innerHTML = '';
     clearAll(chartEls);
@@ -316,6 +453,15 @@ function update() {
   const shocks = makeTrialShocks(FUND_CODES, investment.projectionYears, inputs.seed, inputs.distribution)();
   lastRows = runForecast(plan, { ...inputs, shocks });
   lastSim = null; // old simulation no longer matches these inputs
+  lastInputs = inputs;
+  // Cancel a running analysis only if the inputs really changed. (Clicking Run right after typing
+  // fires a 'change' event with identical inputs, which must not cancel the run just started.)
+  if (sensWorkers.length && sensKeyOf(inputs) !== sensRunKey) {
+    stopSensitivity();
+    setSensStatus('Inputs changed, so the sensitivity run was cancelled. Press Run to start it again.');
+  }
+  $('sens-run').disabled = false;
+  checkSensStale();
   renderCards();
   renderTable(lastRows, inputs);
   saveToUrl();
@@ -378,6 +524,12 @@ async function init() {
     $('seed').value = Math.floor(Math.random() * 1_000_000);
     scheduleUpdate();
   });
+
+  // Sensitivity table controls (they live outside the input panel)
+  $('sens-run').addEventListener('click', startSensitivity);
+  $('sens-metric').addEventListener('change', renderSens);
+  $('sens-age').addEventListener('change', renderSens);
+  renderSens();
 
   // Redraw charts when the device switches between light and dark mode.
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
