@@ -238,10 +238,15 @@ function startSimulation(inputs) {
     } else if (msg.type === 'done') {
       lastSim = msg.result;
       $('charts').classList.remove('stale');
-      if (typeof Plotly !== 'undefined') drawAll(chartEls, lastSim);
+      const plotlyOk = typeof Plotly !== 'undefined';
+      if (plotlyOk) drawAll(chartEls, lastSim);
       renderCards();
       const secs = ((performance.now() - t0) / 1000).toFixed(1);
-      setStatus(`${lastSim.n.toLocaleString()} trials in ${secs} s`);
+      setStatus(
+        `${lastSim.n.toLocaleString()} trials in ${secs} s` +
+          (plotlyOk ? '' : ' · charts unavailable: js/plotly.min.js did not load'),
+        { isError: !plotlyOk }
+      );
       mine.terminate();
       worker = null;
     } else if (msg.type === 'error') {

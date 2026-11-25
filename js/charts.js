@@ -9,7 +9,8 @@ const RED_FILL = 'rgba(214,39,40,0.22)';
 const ORANGE = 'rgb(255,127,14)';
 
 const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-const CONFIG = { responsive: true, displaylogo: false };
+// The hover toolbar covers the title on phones, so hide it on narrow screens.
+const config = () => ({ responsive: true, displaylogo: false, displayModeBar: window.innerWidth > 700 });
 
 // Shared look for every chart.
 function baseLayout(title, xTitle, yTitle) {
@@ -20,10 +21,10 @@ function baseLayout(title, xTitle, yTitle) {
     paper_bgcolor: 'rgba(0,0,0,0)',
     plot_bgcolor: 'rgba(0,0,0,0)',
     font: { color: text, size: 12 },
-    margin: { l: 80, r: 24, t: 54, b: 56 },
+    margin: { l: 64, r: 20, t: 54, b: 56 },
     height: 380,
     xaxis: { title: { text: xTitle }, gridcolor: grid, zerolinecolor: grid },
-    yaxis: { title: { text: yTitle }, gridcolor: grid, zerolinecolor: grid, tickformat: '$,.0f' },
+    yaxis: { title: { text: yTitle }, gridcolor: grid, zerolinecolor: grid, tickformat: '$.3~s', hoverformat: '$,.0f' },
     legend: { orientation: 'h', y: -0.22 },
     hoverlabel: { font: { size: 12 } },
   };
@@ -38,10 +39,12 @@ export function drawHistogram(el, res) {
     ['95th', res.tavP95.at(-1), 'dash'],
   ];
   const layout = baseLayout(
-    `Distribution of final value at age ${last} (${res.n.toLocaleString()} trials)`,
+    `Final value at age ${last}: ${res.n.toLocaleString()} trials`,
     'Total account value', 'Trials'
   );
-  layout.xaxis.tickformat = '$,.0f';
+  layout.xaxis.tickformat = '$.3~s';
+  layout.xaxis.hoverformat = '$,.0f';
+  layout.xaxis.nticks = 6;
   layout.yaxis.tickformat = ',d';
   layout.showlegend = false;
   layout.bargap = 0.03;
@@ -51,14 +54,15 @@ export function drawHistogram(el, res) {
   }));
   layout.annotations = marks.map(([label, x], i) => ({
     x, yref: 'paper', y: 1, yanchor: 'bottom', showarrow: false,
-    text: `${label}<br>$${Math.round(x).toLocaleString()}`, font: { size: 11 },
-    xshift: i === 0 ? -28 : i === 2 ? 28 : 0,
+    text: `${label} $${(x / 1e6).toFixed(2)}M`, font: { size: 11 },
+    yshift: i === 1 ? 16 : 0,
+    xanchor: i === 0 ? 'right' : i === 2 ? 'left' : 'center',
   }));
-  layout.margin.t = 78;
+  layout.margin.t = 84;
   Plotly.react(el, [{
     type: 'histogram', x: res.finalTavs, nbinsx: 40, marker: { color: BLUE },
     hovertemplate: 'Value %{x}<br>Trials %{y}<extra></extra>',
-  }], layout, CONFIG);
+  }], layout, config());
 }
 
 // A median line with a shaded 5th-95th percentile band (used for value and fees).
@@ -78,7 +82,7 @@ function drawBand(el, { ages, p5, med, p95, color, fill, title, yTitle, medName,
       hovertemplate:
         `5th: $%{customdata[0]:,.0f}<br>${label}: $%{y:,.0f}<br>95th: $%{customdata[1]:,.0f}<extra></extra>`,
     },
-  ], layout, CONFIG);
+  ], layout, config());
 }
 
 // 2. Total account value over time.
@@ -86,7 +90,7 @@ export function drawValueBand(el, res) {
   drawBand(el, {
     ages: res.ages, p5: res.tavP5, med: res.tavMed, p95: res.tavP95,
     color: BLUE, fill: BLUE_FILL, medName: 'Median', label: 'Median',
-    title: `Total account value over time (${res.n.toLocaleString()} trials)`,
+    title: 'Total account value over time',
     yTitle: 'Total account value',
   });
 }
@@ -96,7 +100,7 @@ export function drawFeeBand(el, res) {
   drawBand(el, {
     ages: res.ages, p5: res.feeP5, med: res.feeMed, p95: res.feeP95,
     color: RED, fill: RED_FILL, medName: 'Median fees', label: 'Median',
-    title: `Total fees & charges per policy year (${res.n.toLocaleString()} trials)`,
+    title: 'Fees & charges per policy year',
     yTitle: 'Fees & charges per year',
   });
 }
@@ -104,7 +108,7 @@ export function drawFeeBand(el, res) {
 // 4. Median supplementary vs benefit charge, by age.
 export function drawFeeBreakdown(el, res) {
   const layout = baseLayout(
-    `Median fee breakdown by age (${res.n.toLocaleString()} trials)`, 'Age', 'Median charge per year'
+    'Median fee breakdown by age', 'Age', 'Median charge per year'
   );
   layout.barmode = 'group';
   layout.bargap = 0.15;
@@ -114,7 +118,7 @@ export function drawFeeBreakdown(el, res) {
       hovertemplate: '$%{y:,.0f}' },
     { type: 'bar', x: res.ages, y: res.benMed, name: 'Benefit charge', marker: { color: RED },
       hovertemplate: '$%{y:,.0f}' },
-  ], layout, CONFIG);
+  ], layout, config());
 }
 
 export function drawAll(els, res) {
