@@ -3,7 +3,9 @@
 //
 // Two kinds of job:
 //   (default)         one big Monte Carlo for the charts  -> progress messages, then 'done'
-//   type: 'cells'     a list of sensitivity-grid cells     -> one 'cell' message each, then 'cells-done'
+//   type: 'cells'     a list of grid cells                 -> one 'cell' message each, then 'cells-done'
+//                     (a cell can set mu + sigma for the sensitivity table, and/or
+//                      withdrawalRate + startYear for the depletion chart)
 
 import { runMonteCarlo } from './montecarlo.js';
 import { makeTrialShocks } from './rng.js';
@@ -26,17 +28,30 @@ function runMain({ plan, inputs, nTrials, seed, fundCodes }) {
   self.postMessage({ type: 'done', result }, [result.finalTavs.buffer]);
 }
 
-// Each cell = "every fund in your mix earns this return with this volatility".
+// Each cell changes one assumption:
+//   mu + sigma           -> every fund in your mix earns this return with this volatility
+//   withdrawalRate       -> from startYear, withdraw rate x account value each year (dividends reinvested before)
 // Every cell restarts the same seeded stream, so cells differ only because of the assumption.
 function runCells({ plan, inputs, nTrials, seed, fundCodes, cells }) {
   const years = inputs.investment.projectionYears;
   for (const cell of cells) {
-    const funds = {};
-    for (const [code, f] of Object.entries(inputs.funds)) {
-      funds[code] = f.weight > 0 ? { ...f, mu: cell.mu, sigma: cell.sigma } : f;
+    let cellInputs = inputs;
+    if (cell.mu !== undefined) {
+      const funds = {};
+      for (const [code, f] of Object.entries(inputs.funds)) {
+        funds[code] = f.weight > 0 ? { ...f, mu: cell.mu, sigma: cell.sigma } : f;
+      }
+      cellInputs = { ...cellInputs, funds };
+    }
+    if (cell.withdrawalRate !== undefined) {
+      cellInputs = {
+        ...cellInputs,
+        investment: { ...inputs.investment, yearsToReinvest: cell.startYear - 1 }, // reinvest until withdrawals start
+        withdrawalPlan: { startYear: cell.startYear, rate: cell.withdrawalRate },
+      };
     }
     const nextShocks = makeTrialShocks(fundCodes, years, seed, inputs.distribution);
-    const r = runMonteCarlo(plan, { ...inputs, funds }, nTrials, nextShocks);
+    const r = runMonteCarlo(plan, cellInputs, nTrials, nextShocks);
     self.postMessage({
       type: 'cell',
       key: cell.key,

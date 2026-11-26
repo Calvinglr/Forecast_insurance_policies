@@ -5,8 +5,9 @@
 
 import { FREQUENCIES, runForecast, summarise, validateInvestment } from './awv.js';
 import { makeTrialShocks } from './rng.js';
-import { drawAll, clearAll } from './charts.js';
+import { drawAll, clearAll, drawDepletion } from './charts.js';
 import { buildCells, renderSensitivity, renderLegend } from './sensitivity.js';
+import { buildWithdrawalCells, depletionSeries, RISK_THRESHOLD } from './withdrawal.js';
 
 const FUND_CODES = ['AGAIF', 'AGDIF'];
 const $ = (id) => document.getElementById(id);
@@ -200,7 +201,8 @@ function setMsg(id, text, kind) {
 // Monte Carlo: runs in a Web Worker so the page never freezes
 // ---------------------------------------------------------------------------
 const chartEls = {
-  hist: $('chart-hist'), tav: $('chart-tav'), fees: $('chart-fees'), breakdown: $('chart-breakdown'),
+  hist: $('chart-hist'), tav: $('chart-tav'), surrender: $('chart-surrender'),
+  fees: $('chart-fees'), breakdown: $('chart-breakdown'),
 };
 let worker = null;
 let simTimer = null;
@@ -240,7 +242,9 @@ function startSimulation(inputs) {
       lastSim = msg.result;
       $('charts').classList.remove('stale');
       const plotlyOk = typeof Plotly !== 'undefined';
-      if (plotlyOk) drawAll(chartEls, lastSim);
+      const extras = chartExtras();
+      if (plotlyOk) drawAll(chartEls, lastSim, extras);
+      updateSurrenderNote(lastSim, extras);
       renderCards();
       const secs = ((performance.now() - t0) / 1000).toFixed(1);
       setStatus(
@@ -398,6 +402,192 @@ function startSensitivity() {
 }
 
 // ---------------------------------------------------------------------------
+// Run a list of grid cells (see worker.js) across a few background workers.
+// Returns a handle: handle.stop() cancels everything.
+// ---------------------------------------------------------------------------
+function runCellJobs({ cells, inputs, nTrials, seed, onCell, onDone, onFail }) {
+  const workers = [];
+  const handle = { stop() { workers.forEach((w) => w.terminate()); workers.length = 0; } };
+  const count = Math.max(1, Math.min(4, navigator.hardwareConcurrency || 2, cells.length));
+  let received = 0;
+  for (let i = 0; i < count; i++) {
+    let w;
+    try {
+      w = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+    } catch (e) {
+      handle.stop();
+      onFail('This browser could not start background workers.');
+      return handle;
+    }
+    workers.push(w);
+    w.onmessage = (event) => {
+      if (!workers.includes(w)) return; // from a run we have since cancelled
+      const msg = event.data;
+      if (msg.type === 'cell') {
+        received++;
+        onCell(msg.key, msg.result, received);
+        if (received === cells.length) { handle.stop(); onDone(); }
+      } else if (msg.type === 'error') {
+        handle.stop();
+        onFail('Failed: ' + msg.message);
+      }
+    };
+    w.onerror = () => {
+      if (!workers.includes(w)) return;
+      handle.stop();
+      onFail('Failed to start. If you opened the page from your computer, use the GitHub Pages address instead.');
+    };
+    w.postMessage({
+      type: 'cells', plan, inputs, nTrials, seed, fundCodes: FUND_CODES,
+      cells: cells.filter((_, j) => j % count === i),
+    });
+  }
+  return handle;
+}
+
+// ---------------------------------------------------------------------------
+// Withdrawal analysis: probability of account depletion at different withdrawal rates
+// ---------------------------------------------------------------------------
+let depGrid = null;   // finished results, or null
+let depRun = null;    // handle of the running analysis, or null when idle
+let depRunKey = null; // depKeyOf() of the inputs the running analysis started with
+
+// Everything that changes this analysis (unlike the sensitivity table, fund returns DO matter here).
+function depKeyOf(inputs) {
+  return JSON.stringify({
+    client: inputs.client, investment: inputs.investment, funds: inputs.funds,
+    distribution: inputs.distribution, seed: inputs.seed,
+  });
+}
+// Withdrawals begin the year after the "reinvest dividends through year N" setting.
+const depStartYear = (inputs) => inputs.investment.yearsToReinvest + 1;
+const depPossible = (inputs) => depStartYear(inputs) <= inputs.investment.projectionYears;
+
+function setDepStatus(text, { progress = null, isError = false } = {}) {
+  const box = $('dep-status');
+  box.hidden = !text;
+  box.classList.toggle('error-text', isError);
+  $('dep-text').textContent = text || '';
+  $('dep-progress').hidden = progress === null;
+  if (progress !== null) $('dep-progress').value = progress;
+}
+
+function stopDepletion() {
+  if (depRun) depRun.stop();
+  depRun = null;
+  $('dep-run').disabled = !(lastInputs && depPossible(lastInputs));
+}
+
+function renderDepletion() {
+  const el = $('chart-depletion');
+  const has = !!depGrid;
+  $('dep-empty').hidden = has;
+  if (!has) {
+    if (typeof Plotly !== 'undefined') { try { Plotly.purge(el); } catch { /* never drawn */ } }
+    el.innerHTML = '';
+    $('dep-note').textContent = '';
+    $('dep-stale').hidden = true;
+    $('dep-wrap').classList.remove('stale');
+    return;
+  }
+  const data = depletionSeries(depGrid);
+  if (typeof Plotly !== 'undefined') {
+    drawDepletion(el, data, { startAge: depGrid.startAge, n: depGrid.n, threshold: RISK_THRESHOLD });
+  }
+  const pct = (x) => `${Math.round(x * 100)}%`;
+  const verdict =
+    data.sustainable === null
+      ? `Even with no withdrawals, more than ${pct(RISK_THRESHOLD)} of trials run out of money by age ${data.finalAge}.`
+      : `The highest rate here with at most a ${pct(RISK_THRESHOLD)} chance of depletion by age ${data.finalAge} is ${pct(data.sustainable)}` +
+        (data.sustainable === data.rates[data.rates.length - 1] ? ' (the top of the range).' : '.');
+  $('dep-note').textContent =
+    `Withdrawals start at age ${depGrid.startAge}: each year you withdraw the rate × the account value on that day, as a fixed dollar ` +
+    `amount with no inflation increase, and dividends are reinvested. Depleted = the account can no longer pay the withdrawal and ` +
+    `charges. Each point is ${depGrid.n.toLocaleString()} trials (seed ${depGrid.seed}), using your current fund assumptions. ${verdict}`;
+}
+
+function checkDepStale() {
+  const stale = !!depGrid && !!lastInputs && depGrid.key !== depKeyOf(lastInputs);
+  $('dep-wrap').classList.toggle('stale', stale);
+  $('dep-stale').hidden = !stale;
+}
+
+function refreshDepInfo(inputs) {
+  if (depPossible(inputs)) {
+    const startYear = depStartYear(inputs);
+    $('dep-info').textContent =
+      `Withdrawals would start at age ${inputs.client.entryAge + startYear - 1} (policy year ${startYear}), ` +
+      `the year after your "Reinvest dividends through year ${inputs.investment.yearsToReinvest}" setting.`;
+  } else {
+    $('dep-info').textContent =
+      'There is no withdrawal period in this projection. Lower "Reinvest dividends through year" below the end age to analyse withdrawals.';
+  }
+  $('dep-run').disabled = !!depRun || !depPossible(inputs);
+}
+
+function startDepletion() {
+  if (!lastInputs || !lastRows || !depPossible(lastInputs)) return;
+  stopDepletion();
+  const inputs = lastInputs;
+  const key = depKeyOf(inputs);
+  depRunKey = key;
+  const startYear = depStartYear(inputs);
+  const nTrials = Number($('dep-trials').value);
+  const cells = buildWithdrawalCells(startYear);
+  const { seed, nTrials: _mainTrials, horizon, ...forecastInputs } = inputs;
+  const results = {};
+  const ages = lastRows.map((r) => r.age);
+  const t0 = performance.now();
+  $('dep-run').disabled = true;
+  setDepStatus(`Running ${cells.length} simulations of ${nTrials.toLocaleString()} trials…`, { progress: 0 });
+
+  depRun = runCellJobs({
+    cells, inputs: forecastInputs, nTrials, seed,
+    onCell: (cellKey, result, done) => {
+      results[cellKey] = result;
+      setDepStatus(`Running ${cells.length} simulations of ${nTrials.toLocaleString()} trials… ${done}/${cells.length}`, { progress: done / cells.length });
+    },
+    onDone: () => {
+      depGrid = { cells: results, n: nTrials, seed, key, ages, startAge: inputs.client.entryAge + startYear - 1 };
+      depRun = null;
+      setDepStatus(`${cells.length} simulations × ${nTrials.toLocaleString()} trials in ${((performance.now() - t0) / 1000).toFixed(1)} s`);
+      renderDepletion();
+      checkDepStale();
+      refreshDepInfo(lastInputs || inputs);
+    },
+    onFail: (message) => {
+      depRun = null;
+      setDepStatus('Withdrawal analysis. ' + message, { isError: true });
+      refreshDepInfo(lastInputs || inputs);
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Surrender-value chart helpers
+// ---------------------------------------------------------------------------
+// Cumulative premiums and the full-surrender charge factor for each policy year.
+function chartExtras() {
+  let paid = 0;
+  return {
+    cumPremiums: lastRows.map((r) => (paid += r.contribution)),
+    surrenderFactors: lastRows.map((r) => plan.fullSurrenderCharge[String(r.policyYear)] ?? 0),
+  };
+}
+
+function updateSurrenderNote(sim, extras) {
+  const surrender = sim.tavMed.map((v, i) => v * (1 - extras.surrenderFactors[i]));
+  const firstAge = (series) => {
+    const i = series.findIndex((v, k) => extras.cumPremiums[k] > 0 && v >= extras.cumPremiums[k]);
+    return i < 0 ? 'never within the projection' : `age ${sim.ages[i]}`;
+  };
+  const pct = (y) => `${Math.round((plan.fullSurrenderCharge[String(y)] ?? 0) * 100)}%`;
+  $('surrender-note').textContent =
+    `Surrender value = account value × (1 − full-surrender charge). The charge is ${pct(1)} in year 1, falling to ${pct(10)} in year 10, ` +
+    `and 0% from year 11. Median account value first reaches the premiums paid at ${firstAge(sim.tavMed)}; median surrender value at ${firstAge(surrender)}.`;
+}
+
+// ---------------------------------------------------------------------------
 // Main update: runs on every input change
 // ---------------------------------------------------------------------------
 function update() {
@@ -440,6 +630,12 @@ function update() {
     stopSensitivity();
     setSensStatus('');
     renderSens();
+    depGrid = null;
+    stopDepletion();
+    setDepStatus('');
+    renderDepletion();
+    $('dep-info').textContent = '';
+    $('surrender-note').textContent = '';
     $('cards').innerHTML = '';
     $('forecast').innerHTML = '';
     clearAll(chartEls);
@@ -462,6 +658,13 @@ function update() {
   }
   $('sens-run').disabled = false;
   checkSensStale();
+  // Same rule for the withdrawal analysis: cancel only if its inputs really changed.
+  if (depRun && depKeyOf(inputs) !== depRunKey) {
+    stopDepletion();
+    setDepStatus('Inputs changed, so the withdrawal analysis was cancelled. Press Run to start it again.');
+  }
+  refreshDepInfo(inputs);
+  checkDepStale();
   renderCards();
   renderTable(lastRows, inputs);
   saveToUrl();
@@ -530,10 +733,13 @@ async function init() {
   $('sens-metric').addEventListener('change', renderSens);
   $('sens-age').addEventListener('change', renderSens);
   renderSens();
+  $('dep-run').addEventListener('click', startDepletion);
+  renderDepletion();
 
   // Redraw charts when the device switches between light and dark mode.
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-    if (lastSim && typeof Plotly !== 'undefined') drawAll(chartEls, lastSim);
+    if (lastSim && lastRows && typeof Plotly !== 'undefined') drawAll(chartEls, lastSim, chartExtras());
+    if (depGrid) renderDepletion();
   });
 
   update();

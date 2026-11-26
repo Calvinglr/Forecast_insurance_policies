@@ -7,6 +7,7 @@ const BLUE_FILL = 'rgba(31,119,180,0.22)';
 const RED = 'rgb(214,39,40)';
 const RED_FILL = 'rgba(214,39,40,0.22)';
 const ORANGE = 'rgb(255,127,14)';
+const GREEN = 'rgb(44,160,44)';
 
 const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 // The hover toolbar covers the title on phones, so hide it on narrow screens.
@@ -122,9 +123,72 @@ export function drawFeeBreakdown(el, res) {
   ], layout, config());
 }
 
-export function drawAll(els, res) {
+// Premiums paid vs account value vs surrender value, over age.
+// extras = { cumPremiums: [...], surrenderFactors: [...] } with one entry per policy year.
+// Surrender value = account value x (1 - full-surrender charge), so its percentiles are the
+// account value's percentiles scaled by the same factor in each year.
+export function drawSurrender(el, res, extras) {
+  const { ages } = res;
+  const surrMed = res.tavMed.map((v, i) => v * (1 - extras.surrenderFactors[i]));
+  const layout = baseLayout('Premiums paid vs account value vs surrender value', 'Age', 'Value');
+  layout.hovermode = 'x unified';
+  Plotly.react(el, [
+    {
+      type: 'scatter', mode: 'lines', x: ages.concat([...ages].reverse()), y: res.tavP95.concat([...res.tavP5].reverse()),
+      fill: 'toself', fillcolor: BLUE_FILL, line: { color: 'rgba(0,0,0,0)' },
+      hoverinfo: 'skip', name: 'Account value 5th–95th percentile',
+    },
+    {
+      type: 'scatter', mode: 'lines', x: ages, y: res.tavMed, name: 'Account value (median)',
+      line: { color: BLUE, width: 2.5 },
+      customdata: ages.map((_, i) => [res.tavP5[i], res.tavP95[i]]),
+      hovertemplate: 'Account value: $%{y:,.0f} (5th $%{customdata[0]:,.0f}, 95th $%{customdata[1]:,.0f})<extra></extra>',
+    },
+    {
+      type: 'scatter', mode: 'lines', x: ages, y: surrMed, name: 'Surrender value (median)',
+      line: { color: GREEN, width: 2.5, dash: 'dash' },
+      hovertemplate: 'Surrender value: $%{y:,.0f}<extra></extra>',
+    },
+    {
+      type: 'scatter', mode: 'lines', x: ages, y: extras.cumPremiums, name: 'Cumulative premiums paid',
+      line: { color: ORANGE, width: 2.5, shape: 'hv' },
+      hovertemplate: 'Premiums paid: $%{y:,.0f}<extra></extra>',
+    },
+  ], layout, config());
+}
+
+// Probability of depletion by withdrawal rate. data comes from withdrawal.js depletionSeries().
+export function drawDepletion(el, data, { startAge, n, threshold }) {
+  const colours = [BLUE, ORANGE, GREEN, RED];
+  const layout = baseLayout(
+    'Probability of account depletion by withdrawal rate',
+    `Annual withdrawal rate (% of account value at age ${startAge})`, 'Probability of depletion'
+  );
+  layout.hovermode = 'x unified';
+  layout.xaxis.type = 'category';
+  layout.yaxis.tickformat = '.0%';
+  layout.yaxis.hoverformat = '.1%';
+  layout.yaxis.range = [0, 1.02];
+  layout.shapes = [{
+    type: 'line', xref: 'paper', x0: 0, x1: 1, y0: threshold, y1: threshold,
+    line: { color: cssVar('--muted'), width: 1.2, dash: 'dot' },
+  }];
+  layout.annotations = [{
+    xref: 'paper', x: 1, xanchor: 'right', y: threshold, yanchor: 'bottom', showarrow: false,
+    text: `${Math.round(threshold * 100)}% risk`, font: { size: 11, color: cssVar('--muted') },
+  }];
+  const labels = data.rates.map((r) => `${Math.round(r * 100)}%`);
+  Plotly.react(el, data.series.map((s, i) => ({
+    type: 'scatter', mode: 'lines+markers', x: labels, y: s.probs, name: `By age ${s.age}`,
+    line: { color: colours[i % colours.length], width: 2.5 }, marker: { size: 6 },
+    hovertemplate: `By age ${s.age}: %{y:.1%}<extra></extra>`,
+  })), layout, config());
+}
+
+export function drawAll(els, res, extras) {
   drawHistogram(els.hist, res);
   drawValueBand(els.tav, res);
+  if (extras) drawSurrender(els.surrender, res, extras);
   drawFeeBand(els.fees, res);
   drawFeeBreakdown(els.breakdown, res);
 }

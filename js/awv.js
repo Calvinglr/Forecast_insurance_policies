@@ -115,8 +115,14 @@ export function validateInvestment(plan, frequency, annualPremium) {
 //     AGAIF: { weight, mu, sigma, dividend, price }, ...   // weight 0..1, mu/sigma annual
 //   },
 //   shocks:       { AGAIF: [z1, z2, ...], ... },            // standard random draws, one per year
-//   distribution: 'normal' | 't'
+//   distribution: 'normal' | 't',
+//   withdrawalPlan: { startYear, rate }                      // optional, see below
 // }
+//
+// withdrawalPlan (optional): from policy year `startYear`, withdraw a fixed dollar amount each year,
+// equal to `rate` x the account value at the start of that year (the "4% rule" idea). It replaces
+// the usual dividend payout, so dividends are reinvested and the withdrawal is taken from the account.
+// The withdrawal is capped at what the account holds. Leave it out for the notebook's behaviour.
 //
 // Returns an array with one row per policy year.
 export function runForecast(plan, inputs) {
@@ -126,6 +132,8 @@ export function runForecast(plan, inputs) {
   const annualisedPremium = investment.annualPremium;
   const premiumPaymentYears = investment.premiumPaymentYears;
   const onPremiumHoliday = false; // not modelled in the notebook either
+  const withdrawalPlan = inputs.withdrawalPlan || null;
+  let fixedWithdrawal = null; // the dollar amount, fixed in the first withdrawal year
 
   // Only funds with a weight above zero take part (same as the notebook).
   const codes = Object.keys(fundInputs).filter((c) => fundInputs[c].weight > 0);
@@ -193,7 +201,12 @@ export function runForecast(plan, inputs) {
     // --- withdraw or reinvest dividends ---
     const decision = withdrawOrReinvest(policyYear, investment.yearsToReinvest);
     const totalDiv = codes.reduce((s, c) => s + div[c], 0);
-    const withdrawal = decision === 'Withdraw' ? totalDiv : 0;
+    let withdrawal = decision === 'Withdraw' ? totalDiv : 0;
+    if (withdrawalPlan && policyYear >= withdrawalPlan.startYear) {
+      if (fixedWithdrawal === null) fixedWithdrawal = withdrawalPlan.rate * totalTavBeg;
+      const available = Math.max(codes.reduce((s, c) => s + tavGD[c], 0), 0);
+      withdrawal = Math.min(fixedWithdrawal, available);
+    }
     const monthlyIncome = withdrawal / 12;
     const pwCharge = withdrawal ? partialWithdrawalCharge(plan, policyYear, withdrawal) : 0;
     cumWithdrawals += withdrawal;
