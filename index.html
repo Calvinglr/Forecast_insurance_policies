@@ -124,6 +124,8 @@
       <div id="charts" class="charts">
         <div class="chart" id="chart-hist"></div>
         <div class="chart" id="chart-tav"></div>
+        <div class="chart" id="chart-surrender"></div>
+        <p id="surrender-note" class="hint chart-note"></p>
         <div class="chart" id="chart-fees"></div>
         <div class="chart" id="chart-breakdown"></div>
       </div>
@@ -161,6 +163,30 @@
         <p id="sens-note" class="hint"></p>
       </div>
 
+      <h2>Withdrawal analysis: probability of depletion</h2>
+      <div class="sens-controls">
+        <label>Trials per withdrawal rate
+          <select id="dep-trials">
+            <option value="500">500</option>
+            <option value="1000">1,000</option>
+            <option value="2000" selected>2,000</option>
+            <option value="5000">5,000 (slow)</option>
+          </select>
+        </label>
+        <button id="dep-run" type="button" class="primary">Run withdrawal analysis</button>
+      </div>
+      <p id="dep-info" class="hint"></p>
+      <div id="dep-status" class="sim-status" hidden>
+        <progress id="dep-progress" max="1" value="0"></progress>
+        <span id="dep-text"></span>
+      </div>
+      <p id="dep-stale" class="msg warn" hidden>Your inputs have changed since this chart was calculated. Press Run to refresh it.</p>
+      <div id="dep-wrap" class="sens-wrap">
+        <p id="dep-empty" class="hint">Press “Run withdrawal analysis” to see the chance of running out of money at withdrawal rates from 0% to 10% a year. It runs 11 simulations in the background.</p>
+        <div class="chart" id="chart-depletion"></div>
+        <p id="dep-note" class="hint"></p>
+      </div>
+
       <h2>Sample path: trial 1 of the simulation</h2>
       <div class="table-wrap">
         <table id="forecast"></table>
@@ -172,6 +198,8 @@
           <li><strong>Premium payment years.</strong> The notebook's <code>investment</code> sets 3 years, but its forecast function ignores that and hard-codes the plan's 8-year term. This page defaults to 8 to match the notebook, and lets you change it.</li>
           <li><strong>Welcome bonus</strong> = tier rate × annual premium (e.g. 3% × $10,000 = $300 in year 1), paid only in years a premium is received, and tiers count payments (so monthly year 2 is tier 2). The original notebook added the bare rate as dollars, paid it after premiums stopped, and used the policy year as the payment number, so its totals differ slightly.</li>
           <li><strong>Monte Carlo.</strong> Each trial draws one random return per fund per year (normal, or Student-t with 3 degrees of freedom), then runs the full forecast. Charts show percentiles across trials. The 5th–95th band covers 90% of outcomes. Note that median and percentile lines are taken year by year, so they don't trace any one trial.</li>
+          <li><strong>Surrender value</strong> = account value × (1 − full-surrender charge), using the plan's charge for that policy year (section 5.5 of the notebook). The notebook defines the charge but never charts it, so this is new.</li>
+          <li><strong>Withdrawal analysis.</strong> The notebook has no rate-based withdrawals, so this is a new rule: from the year after your "Reinvest dividends through year" setting, you withdraw (rate × account value on that day) every year as a fixed dollar amount, with no inflation increase. Dividends are reinvested rather than paid out. "Depleted" means the account can no longer pay the withdrawal and charges, which is where the model would add a top-up.</li>
           <li><strong>Top-ups.</strong> If a year's charges exceed the account value, the model adds a top-up to cover them. "Trials needing top-ups" counts trials where that happens at least once.</li>
           <li><strong>Calculation end age.</strong> The forecast runs from the entry age to the age you choose (maximum 100), counting the end age as the last policy year. The benefit-charge table stops at age 99, so age 100 uses the age-99 rate.</li>
           <li><strong>Not modelled:</strong> premium holiday, voluntary top-ups, surrender, and switching funds.</li>

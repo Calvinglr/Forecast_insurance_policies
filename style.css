@@ -196,3 +196,9 @@ table.sens td { border-radius: 6px; font-weight: 600; font-size: 13px; }
   table.sens tbody th { width: 13%; font-size: 12px; }
   table.sens .corner { font-size: 10px; white-space: normal; }
 }
+
+/* ---------- Stage 3: new charts ---------- */
+.chart-note { margin: -4px 4px 4px; }
+.chart-note:empty { display: none; }
+#dep-wrap .chart { min-height: 380px; }
+#dep-wrap .chart:empty { min-height: 0; }
